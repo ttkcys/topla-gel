@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: "export", // Static export için bu satırı ekleyin
-  basePath: "/topla-gel", // GitHub repo adınızla eşleşmeli
+  basePath: "/topla-gel", // GitHub repo adı ile eşleşmeli (eğer repo adı "topla-gel" ise)
+  assetPrefix: "/topla-gel/",
   typescript: {
     ignoreBuildErrors: true,
   },
