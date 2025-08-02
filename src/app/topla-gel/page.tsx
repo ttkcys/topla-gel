@@ -6,6 +6,7 @@ import { db, auth } from '../../utils/firebase';
 import { doc, getDoc, collection, getDocs, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
+import toast from 'react-hot-toast';
 
 export default function ToplaGel() {
     const [isVisible, setIsVisible] = useState(false);
@@ -32,6 +33,132 @@ export default function ToplaGel() {
     const [votes, setVotes] = useState([]);
     const [showParticipantsModal, setShowParticipantsModal] = useState(false);
     const [allUsers, setAllUsers] = useState([]);
+    const [showRatingModal, setShowRatingModal] = useState(false);
+    const [selectedPosition, setSelectedPosition] = useState('');
+    const [ratingValue, setRatingValue] = useState(0);
+    const [selectedUserId, setSelectedUserId] = useState('');
+    const [ballPosition, setBallPosition] = useState({ x: 30, y: 40 });
+
+    const handleRateUser = async (userId: string, position: string, score: number) => {
+        try {
+            // Rating document ID'sini oluştur (raterId + ratedId + position)
+            const ratingId = `${currentUser.uid}_${userId}_${position}`;
+            const ratingRef = doc(db, 'ratings', ratingId);
+
+            // Önce mevcut oyu kontrol et
+            const ratingSnap = await getDoc(ratingRef);
+            const previousScore = ratingSnap.exists() ? ratingSnap.data().score : 0;
+
+            // Rating'i güncelle veya oluştur
+            await setDoc(ratingRef, {
+                raterId: currentUser.uid,
+                ratedId: userId,
+                position,
+                score,
+                timestamp: new Date().toISOString()
+            });
+
+            // Kullanıcının puanlarını güncelle
+            const userRef = doc(db, 'users', userId);
+            const userSnap = await getDoc(userRef);
+
+            if (userSnap.exists()) {
+                const userData = userSnap.data();
+                const puanlar = userData.puanlar || {};
+
+                // Eğer bu mevki için puan yoksa, başlangıç değerlerini oluştur
+                if (!puanlar[position]) {
+                    puanlar[position] = { total: 0, count: 0, average: 0 };
+                }
+
+                // Toplam ve sayıyı güncelle
+                const newTotal = puanlar[position].total - previousScore + score;
+                const newCount = previousScore > 0 ? puanlar[position].count : puanlar[position].count + 1;
+                const newAverage = newCount > 0 ? newTotal / newCount : 0;
+
+                await updateDoc(userRef, {
+                    [`puanlar.${position}`]: {
+                        total: newTotal,
+                        count: newCount,
+                        average: newAverage
+                    }
+                });
+
+                // Genel ortalamayı güncelle
+                await updateOverallAverage(userId);
+            }
+
+            toast.success('Oyunuz başarıyla kaydedildi!');
+        } catch (error) {
+            console.error("Oy verme hatası:", error);
+            toast.error('Oyunuz kaydedilirken bir hata oluştu');
+        }
+    };
+
+    const updateOverallAverage = async (userId: string) => {
+        const userRef = doc(db, 'users', userId);
+        const userSnap = await getDoc(userRef);
+
+        if (userSnap.exists()) {
+            const userData = userSnap.data();
+            const puanlar = userData.puanlar || {};
+
+            let totalAverage = 0;
+            let positionCount = 0;
+
+            // Tüm mevkilerin ortalamalarını topla
+            Object.keys(puanlar).forEach(position => {
+                if (puanlar[position].average > 0) {
+                    totalAverage += puanlar[position].average;
+                    positionCount++;
+                }
+            });
+
+            const overallAverage = positionCount > 0 ? totalAverage / positionCount : 0;
+
+            await updateDoc(userRef, {
+                overallAverage
+            });
+        }
+    };
+
+    // Kullanıcı ortalamasını güncelleme fonksiyonu
+    const updateUserAverage = async (userId: string) => {
+        const ratingsRef = collection(db, 'ratings');
+        const q = query(ratingsRef, where('ratedId', '==', userId));
+        const querySnapshot = await getDocs(q);
+
+        let totalRatings = 0;
+        let count = 0;
+        const positionAverages: Record<string, { total: number, count: number }> = {};
+
+        querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            totalRatings += data.score;
+            count++;
+
+            if (!positionAverages[data.position]) {
+                positionAverages[data.position] = { total: 0, count: 0 };
+            }
+            positionAverages[data.position].total += data.score;
+            positionAverages[data.position].count++;
+        });
+
+        // Mevki bazında ortalamaları hesapla
+        const updatedPuanlar: Record<string, number> = {};
+        Object.keys(positionAverages).forEach(position => {
+            updatedPuanlar[position] = positionAverages[position].total / positionAverages[position].count;
+        });
+
+        // Genel ortalama hesapla
+        const average = count > 0 ? totalRatings / count : 0;
+
+        // Firestore'da güncelle
+        await updateDoc(doc(db, 'users', userId), {
+            average,
+            puanlar: updatedPuanlar
+        });
+    };
 
     const handleVote = async (status, extraParticipants = []) => {
         try {
@@ -58,7 +185,16 @@ export default function ToplaGel() {
             const usersSnap = await getDocs(usersRef);
             const usersData = usersSnap.docs.map(doc => ({
                 id: doc.id,
-                ...doc.data()
+                ...doc.data(),
+                // Varsayılan puanlar
+                puanlar: {
+                    'Kaleci': doc.data().puanlar?.Kaleci || 0,
+                    'Defans': doc.data().puanlar?.Defans || 0,
+                    'OrtaSaha': doc.data().puanlar?.OrtaSaha || 0,
+                    'Forvet': doc.data().puanlar?.Forvet || 0,
+                    'Kanat': doc.data().puanlar?.Kanat || 0,
+                    'Bek': doc.data().puanlar?.Bek || 0
+                }
             }));
             setAllUsers(usersData);
         } catch (error) {
@@ -70,9 +206,16 @@ export default function ToplaGel() {
         try {
             const votesRef = collection(db, 'votes');
             const votesSnap = await getDocs(votesRef);
-            const votesData = votesSnap.docs.map(doc => doc.data());
+            const votesData = votesSnap.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+            }));
 
             setVotes(votesData);
+
+            // Mevcut kullanıcının oyunu bul
+            const currentUserVote = votesData.find(vote => vote.id === currentUser?.uid);
+            setUserVote(currentUserVote || null);
 
             // Calculate total participants
             let count = 0;
@@ -142,7 +285,11 @@ export default function ToplaGel() {
             setCollectorLoading(false);
         }
     };
-
+    useEffect(() => {
+        if (currentUser) {
+            fetchVotes();
+        }
+    }, [currentUser]);
     // Reset collector
     const resetCollector = async () => {
         try {
@@ -155,13 +302,13 @@ export default function ToplaGel() {
             });
             setCollector(null);
             setVotes([]);
+            setUserVote(null); // Bu satırı ekleyin
             setTotalParticipants(0);
         } catch (err) {
             console.error('Para toplayıcı sıfırlama hatası:', err);
             setError('Para toplayıcı sıfırlanırken hata oluştu: ' + err.message);
         }
     };
-
     // Select random user as collector
     const selectRandomCollector = async () => {
         try {
@@ -255,15 +402,15 @@ export default function ToplaGel() {
                         toplamGol: data.toplamGol || 0,
                         toplamAsist: data.toplamAsist || 0,
                         anaMevki: data.anaMevki || 'Belirtilmemiş',
-                        average: data.average || 0,
+                        overallAverage: data.overallAverage || 0,
                         iban: data.iban || '',
                         puanlar: {
-                            'Kaleci': data.puanlar?.Kaleci || 0,
-                            'Defans': data.puanlar?.Defans || 0,
-                            'Orta Saha': data.puanlar?.OrtaSaha || 0,
-                            'Forvet': data.puanlar?.Forvet || 0,
-                            'Kanat': data.puanlar?.Kanat || 0,
-                            'Bek': data.puanlar?.Bek || 0
+                            Forvet: data.puanlar?.Forvet || { total: 0, count: 0, average: 0 },
+                            OrtaSaha: data.puanlar?.OrtaSaha || { total: 0, count: 0, average: 0 },
+                            Defans: data.puanlar?.Defans || { total: 0, count: 0, average: 0 },
+                            Kaleci: data.puanlar?.Kaleci || { total: 0, count: 0, average: 0 },
+                            Kanat: data.puanlar?.Kanat || { total: 0, count: 0, average: 0 },
+                            Bek: data.puanlar?.Bek || { total: 0, count: 0, average: 0 }
                         }
                     });
                     setError(null);
@@ -365,10 +512,10 @@ export default function ToplaGel() {
                                                 </div>
                                                 <div className="bg-yellow-100 text-yellow-700 px-4 py-2 rounded-full text-sm font-semibold flex items-center gap-1">
                                                     <Star size={14} />
-                                                    Ortalama : {userData.average} Puan
+                                                    Ortalama : {userData.overallAverage} Puan
                                                 </div>
                                             </div>
-                                     
+
                                         </div>
                                     </div>
                                 </div>
@@ -399,31 +546,56 @@ export default function ToplaGel() {
                                         </div>
                                     </div>
                                 </div>
+                                      <div className="bg-white rounded-2xl shadow-2xl p-8 mb-8 backdrop-blur-sm bg-opacity-95">
+                                    <button
+                                        onClick={() => router.push('/liderlik-siralamasi')}
+                                        className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition"
+                                    >
+                                        Liderlik Tabloları - Bol Seçenekli
+                                    </button>
+                                </div>
 
                                 <div className="bg-white rounded-2xl shadow-2xl p-8 mb-8 backdrop-blur-sm bg-opacity-95">
-                                    <h3 className="text-2xl font-bold text-gray-800 mb-6 flex items-center gap-3">
-                                        <Star className="text-yellow-500" size={28} />
-                                        Mevki Puanları
-                                    </h3>
+                                    <div className="flex justify-between items-center mb-6">
+                                        <h3 className="text-2xl font-bold text-gray-800 flex items-center gap-3">
+                                            <Star className="text-yellow-500" size={28} />
+                                            Mevki Puanları
+                                        </h3>
+                                        <button
+                                            onClick={() => {
+                                                setSelectedPosition('Tüm Mevkiler');
+                                                setShowRatingModal(true);
+                                            }}
+                                            className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 transition"
+                                        >
+                                            Oy Ver
+                                        </button>
+                                    </div>
+
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        {Object.entries(userData.puanlar).map(([position, score]) => (
-                                            <div key={position} className="bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors duration-200">
+                                        {Object.entries(userData.puanlar).map(([position, puanData]) => (
+                                            <div key={position} className="bg-gray-50 rounded-lg p-4">
                                                 <div className="flex justify-between items-center">
                                                     <p className="font-semibold text-gray-700">{position}</p>
                                                     <div className="flex items-center gap-2">
-                                                        <div className={`w-3 h-3 rounded-full ${score >= 8 ? 'bg-green-500' :
-                                                            score >= 6 ? 'bg-yellow-500' : 'bg-red-500'
+                                                        <div className={`w-3 h-3 rounded-full ${puanData.average >= 8 ? 'bg-green-500' :
+                                                            puanData.average >= 6 ? 'bg-yellow-500' : 'bg-red-500'
                                                             }`}></div>
-                                                        <span className="text-lg font-bold text-gray-800">{score}</span>
+                                                        <span className="text-lg font-bold text-gray-800">
+                                                            {puanData.average.toFixed(1)}
+                                                        </span>
                                                     </div>
+                                                </div>
+                                                <div className="mt-2 text-xs text-gray-500">
+                                                    {puanData.count} oy
                                                 </div>
                                                 <div className="mt-2">
                                                     <div className="w-full bg-gray-200 rounded-full h-2">
                                                         <div
-                                                            className={`h-2 rounded-full transition-all duration-500 ${score >= 8 ? 'bg-green-500' :
-                                                                score >= 6 ? 'bg-yellow-500' : 'bg-red-500'
+                                                            className={`h-2 rounded-full transition-all duration-500 ${puanData.average >= 8 ? 'bg-green-500' :
+                                                                puanData.average >= 6 ? 'bg-yellow-500' : 'bg-red-500'
                                                                 }`}
-                                                            style={{ width: `${Math.min((score / 10) * 100, 100)}%` }}
+                                                            style={{ width: `${Math.min((puanData.average / 10) * 100, 100)}%` }}
                                                         ></div>
                                                     </div>
                                                 </div>
@@ -631,9 +803,9 @@ export default function ToplaGel() {
                                     <div className="flex justify-between items-center">
                                         <p className="text-black font-medium">{vote.userName}</p>
                                         <span className={`text-black px-2 py-1 rounded-full text-xs ${vote.status === 'Kesin Geleceğim' ? 'bg-green-100 text-green-800' :
-                                                vote.status === 'Kesin Gelmeyeceğim' ? 'bg-red-100 text-red-800' :
-                                                    vote.status === 'Belli Değil' ? 'bg-yellow-100 text-yellow-800' :
-                                                        'bg-blue-100 text-blue-800'
+                                            vote.status === 'Kesin Gelmeyeceğim' ? 'bg-red-100 text-red-800' :
+                                                vote.status === 'Belli Değil' ? 'bg-yellow-100 text-yellow-800' :
+                                                    'bg-blue-100 text-blue-800'
                                             }`}>
                                             {vote.status}
                                         </span>
@@ -664,6 +836,107 @@ export default function ToplaGel() {
                             {votes.length === 0 && (
                                 <p className="text-gray-500 text-center py-4">Henüz katılımcı yok</p>
                             )}
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showRatingModal && (
+                <div className="fixed inset-0 bg-black bg-opacity-60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-xl font-bold text-gray-800">Oy Verme Paneli</h3>
+                            <button
+                                onClick={() => setShowRatingModal(false)}
+                                className="text-gray-500 hover:text-gray-700"
+                            >
+                                ×
+                            </button>
+                        </div>
+
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Mevki Seçin</label>
+                            <select
+                                value={selectedPosition}
+                                onChange={(e) => setSelectedPosition(e.target.value)}
+                                className="text-black w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                            >
+                                <option value="">Bir mevki seçin</option>
+                                <option value="Kaleci">Kaleci</option>
+                                <option value="Defans">Defans</option>
+                                <option value="OrtaSaha">OrtaSaha</option>
+                                <option value="Forvet">Forvet</option>
+                                <option value="Kanat">Kanat</option>
+                                <option value="Bek">Bek</option>
+                            </select>
+                        </div>
+
+                        {selectedPosition && (
+                            <div className="space-y-4">
+                                <div className="bg-blue-50 p-3 rounded-lg">
+                                    <p className="text-sm text-blue-800">
+                                        <strong>Not:</strong> Her kullanıcıya 1-10 arası puan verin.
+                                        Puan verdikten sonra otomatik kaydedilecektir.
+                                    </p>
+                                </div>
+
+                                {allUsers
+                                    .filter(user => user.id !== currentUser.uid)
+                                    .sort((a, b) => a.name.localeCompare(b.name))
+                                    .map(user => (
+                                        <div key={user.id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-3">
+                                                    <img
+                                                        src={user.photoURL || '/default-avatar.png'}
+                                                        className="w-10 h-10 rounded-full"
+                                                        onError={(e) => {
+                                                            e.target.src = `data:image/svg+xml;base64,${btoa('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>')}`;
+                                                        }}
+                                                    />
+                                                    <div>
+                                                        <p className="font-medium">{user.name}</p>
+                                                        <p className="text-xs text-gray-500">{user.anaMevki || 'Mevki belirtilmemiş'}</p>
+                                                    </div>
+                                                </div>
+
+                                                {user.puanlar?.[selectedPosition] ? (
+                                                    <div className="bg-yellow-100 text-yellow-800 px-2 py-1 rounded text-xs">
+                                                        Mevcut: {user.puanlar[selectedPosition].average.toFixed(1)}
+                                                    </div>
+                                                ) : null}
+                                            </div>
+
+                                            <div className="flex flex-wrap gap-1 justify-center">
+                                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(num => (
+                                                    <button
+                                                        key={num}
+                                                        onClick={() => handleRateUser(user.id, selectedPosition, num)}
+                                                        className={`w-8 h-8 rounded-full flex items-center justify-center text-sm transition-colors
+                                                ${(user.puanlar?.[selectedPosition]?.average || 0) >= num
+                                                                ? 'bg-yellow-500 text-white'
+                                                                : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                                                            }`}
+                                                    >
+                                                        {num}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))
+                                }
+                            </div>
+                        )}
+
+                        <div className="mt-6 flex justify-between items-center">
+                            <div className="text-sm text-gray-500">
+                                {selectedPosition && `Toplam ${allUsers.filter(u => u.id !== currentUser.uid).length} oy verilebilir kullanıcı`}
+                            </div>
+                            <button
+                                onClick={() => setShowRatingModal(false)}
+                                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                            >
+                                Paneli Kapat
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -764,7 +1037,7 @@ export default function ToplaGel() {
                                     <option value="">Seçiniz</option>
                                     <option value="Kaleci">Kaleci</option>
                                     <option value="Defans">Defans</option>
-                                    <option value="Orta Saha">Orta Saha</option>
+                                    <option value="OrtaSaha">OrtaSaha</option>
                                     <option value="Forvet">Forvet</option>
                                     <option value="Kanat">Kanat</option>
                                     <option value="Bek">Bek</option>

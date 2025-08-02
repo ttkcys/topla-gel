@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { signInWithGoogle } from '../../utils/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../../utils/firebase';
 
 export default function LoginPage() {
@@ -34,25 +34,37 @@ export default function LoginPage() {
             const result = await signInWithGoogle();
             const user = result.user;
 
-            // Create or update user document in Firestore
-            await setDoc(doc(db, 'users', user.uid), {
-                name: user.displayName || '',
-                email: user.email || '',
-                photoURL: user.photoURL || '',
-                toplamGol: 0,
-                toplamAsist: 0,
-                puanlar: {
-                    Forvet: 0,
-                    OrtaSaha: 0,
-                    Defans: 0,
-                    Kaleci: 0,
-                    Kanat: 0,
-                    Bek: 0
-                },
-                anaMevki: '',
-                average: 0, // Corrected typo from 'avarage'
-                iban: ''
-            }, { merge: true });
+            // Check if user already exists
+            const userDoc = await getDoc(doc(db, 'users', user.uid));
+
+            if (!userDoc.exists()) {
+                // Only set initial data for new users
+                await setDoc(doc(db, 'users', user.uid), {
+                    name: user.displayName || '',
+                    email: user.email || '',
+                    photoURL: user.photoURL || '',
+                    toplamGol: 0,
+                    toplamAsist: 0,
+                    puanlar: {
+                        Forvet: { total: 0, count: 0, average: 0 },
+                        OrtaSaha: { total: 0, count: 0, average: 0 },
+                        Defans: { total: 0, count: 0, average: 0 },
+                        Kaleci: { total: 0, count: 0, average: 0 },
+                        Kanat: { total: 0, count: 0, average: 0 },
+                        Bek: { total: 0, count: 0, average: 0 }
+                    },
+                    anaMevki: '',
+                    average: 0,
+                    iban: ''
+                });
+            } else {
+                // For existing users, just update the basic info that might change
+                await updateDoc(doc(db, 'users', user.uid), {
+                    name: user.displayName || '',
+                    email: user.email || '',
+                    photoURL: user.photoURL || ''
+                });
+            }
 
             // Redirect to /topla-gel
             router.push('/topla-gel');
@@ -84,24 +96,8 @@ export default function LoginPage() {
                 </div>
             </div>
 
-            {/* Animasyonlu futbol topu */}
-            <div
-                className="absolute w-8 h-8 bg-white rounded-full shadow-lg transition-all duration-300 ease-in-out z-20"
-                style={{
-                    left: `${ballPosition.x}%`,
-                    top: `${ballPosition.y}%`,
-                    background: 'radial-gradient(circle at 30% 30%, #ffffff, #f0f0f0, #e0e0e0)',
-                    boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset -2px -2px 4px rgba(0,0,0,0.2)'
-                }}
-            >
-                <div className="w-full h-full relative">
-                    <div className="absolute top-1 left-1 w-1 h-1 bg-black rounded-full"></div>
-                    <div className="absolute top-2 right-1 w-1 h-1 bg-black rounded-full"></div>
-                    <div className="absolute bottom-1 left-2 w-1 h-1 bg-black rounded-full"></div>
-                </div>
-            </div>
-
        
+
 
             {/* Ana içerik */}
             <div className="relative z-10 min-h-screen flex items-center justify-center px-4">
@@ -152,12 +148,6 @@ export default function LoginPage() {
                 </div>
             </div>
 
-            {/* Köşelerde dekoratif elementler */}
-            <div className="absolute top-10 left-10 w-16 h-16 border-4 border-white border-opacity-40 rounded-full animate-spin" style={{ animationDuration: '8s' }}></div>
-            <div className="absolute bottom-10 right-10 w-12 h-12 border-4 border-white border-opacity-40 rounded-full animate-bounce"></div>
-
-            {/* Gradient overlay */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-20"></div>
-        </div>
+      </div>
     );
 }

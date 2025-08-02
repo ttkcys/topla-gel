@@ -54,23 +54,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Animasyonlu futbol topu */}
-      <div
-        className="absolute w-8 h-8 bg-white rounded-full shadow-lg transition-all duration-300 ease-in-out z-20"
-        style={{
-          left: `${ballPosition.x}%`,
-          top: `${ballPosition.y}%`,
-          background: 'radial-gradient(circle at 30% 30%, #ffffff, #f0f0f0, #e0e0e0)',
-          boxShadow: '0 4px 8px rgba(0,0,0,0.3), inset -2px -2px 4px rgba(0,0,0,0.2)'
-        }}
-      >
-        {/* Top üzerindeki pentagon deseni */}
-        <div className="w-full h-full relative">
-          <div className="absolute top-1 left-1 w-1 h-1 bg-black rounded-full"></div>
-          <div className="absolute top-2 right-1 w-1 h-1 bg-black rounded-full"></div>
-          <div className="absolute bottom-1 left-2 w-1 h-1 bg-black rounded-full"></div>
-        </div>
-      </div>
+
 
 
 
@@ -112,12 +96,6 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Köşelerde dekoratif elementler */}
-      <div className="absolute top-10 left-10 w-16 h-16 border-4 border-white border-opacity-40 rounded-full animate-spin" style={{ animationDuration: '8s' }}></div>
-      <div className="absolute bottom-10 right-10 w-12 h-12 border-4 border-white border-opacity-40 rounded-full animate-bounce"></div>
-
-      {/* Gradient overlay - daha hafif */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-20"></div>
-    </div>
+   </div>
   );
 }
